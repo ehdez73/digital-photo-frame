@@ -155,7 +155,9 @@ class PygameCarousel:
             pygame.display.flip()
             return
         surf = self.surfaces[self.current_index % len(self.surfaces)]
-        rect = surf.get_rect(center=self.screen_rect.center)
+        # Center within an inset rect to guarantee margins on all sides
+        inset_rect = self.screen_rect.inflate(-2 * self.image_margin, -2 * self.image_margin)
+        rect = surf.get_rect(center=inset_rect.center)
         self.screen.blit(surf, rect)
         pygame.display.flip()
 
