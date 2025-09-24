@@ -8,7 +8,7 @@ from io import BytesIO
 import threading
 import time
 import hashlib
-from PyQt5 import QtWidgets, QtGui, QtCore
+import pygame
 from google.oauth2 import service_account
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
@@ -82,102 +82,165 @@ def hash_file_list(file_list):
         m.update(f.encode())
     return m.hexdigest()
 
-class ImageCarousel(QtWidgets.QWidget):
-    def __init__(self, image_paths, transition_time, frame_color, frame_width, image_margin):
-        super().__init__()
-        self.setWindowTitle("Digital Photo Frame")
-        self.showFullScreen()
-        self.setStyleSheet("background-color: black;")
+class PygameCarousel:
+    def __init__(self, image_paths, transition_time, image_margin):
+        pygame.init()
+        pygame.display.set_caption("Digital Photo Frame")
+        self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        self.clock = pygame.time.Clock()
+        self.bg_color = (0, 0, 0)
         self.image_paths = image_paths
         self.transition_time = transition_time
-        self.frame_color = frame_color
-        self.frame_width = frame_width
         self.image_margin = image_margin
-        self.current = 0
-        self.images = []
+        self.current_index = 0
         self.paused = False
-        self.label = QtWidgets.QLabel(self)
-        self.label.setAlignment(QtCore.Qt.AlignCenter)
-        self.label.setStyleSheet("background-color: black;")
-        layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(self.label)
-        self.setLayout(layout)
+        self.last_switch_time = time.time()
+        self.surfaces = []
+        self.screen_rect = self.screen.get_rect()
         self.load_images()
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.show_next_image)
-        self.timer.start(self.transition_time * 1000)
-        self.show_next_image()
-        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+
+    def _show_centered_message(self, text):
+        self.screen.fill(self.bg_color)
+        font = pygame.font.SysFont(None, 64)
+        surface = font.render(text, True, (220, 220, 220))
+        rect = surface.get_rect(center=self.screen_rect.center)
+        self.screen.blit(surface, rect)
+        pygame.display.flip()
 
     def load_images(self):
-        screen_rect = QtWidgets.QApplication.primaryScreen().geometry()
-        screen_w, screen_h = screen_rect.width(), screen_rect.height()
-        margin = self.image_margin
-        max_w = screen_w - 2 * margin
-        max_h = screen_h - 2 * margin
-        self.images = []
+        self.surfaces = []
+        width, height = self.screen_rect.size
+        max_w = max(1, width - 2 * self.image_margin)
+        max_h = max(1, height - 2 * self.image_margin)
         for path in self.image_paths:
             try:
-                img = Image.open(path)
+                img = Image.open(path).convert("RGB")
                 img = resize_image_to_fit(img, max_w, max_h)
-                # Create a black background and paste the image centered with margin
-                bg = Image.new("RGB", (screen_w, screen_h), "black")
-                x = (screen_w - img.width) // 2
-                y = (screen_h - img.height) // 2
-                bg.paste(img, (x, y))
-                data = bg.convert("RGBA").tobytes("raw", "RGBA")
-                qimg = QtGui.QImage(data, bg.width, bg.height, QtGui.QImage.Format_RGBA8888)
-                pixmap = QtGui.QPixmap.fromImage(qimg)
-                self.images.append(pixmap)
+                mode = img.mode
+                size = img.size
+                data = img.tobytes()
+                surf = pygame.image.fromstring(data, size, mode)
+                self.surfaces.append(surf)
             except Exception as e:
                 print(f"Error loading image {path}: {e}")
+        if not self.surfaces:
+            # Create a placeholder surface with text
+            font = pygame.font.SysFont(None, 48)
+            text = font.render("No images found.", True, (200, 200, 200))
+            placeholder = pygame.Surface((max_w, max_h))
+            placeholder.fill((0, 0, 0))
+            rect = text.get_rect(center=(placeholder.get_width() // 2, placeholder.get_height() // 2))
+            placeholder.blit(text, rect)
+            self.surfaces.append(placeholder)
 
-    def keyPressEvent(self, event):
-        if event.key() == QtCore.Qt.Key_Right:
-            print("[User Action] Next photo")
-            self.show_next_image(reset_timer=True)
-        elif event.key() == QtCore.Qt.Key_Left:
-            print("[User Action] Previous photo")
-            self.show_prev_image(reset_timer=True)
-        elif event.key() == QtCore.Qt.Key_Escape:
-            print("[User Action] Exit application")
-            QtWidgets.QApplication.quit()
-        elif event.key() == QtCore.Qt.Key_Space:
-            self.toggle_pause()
+    def refresh_images(self, new_image_paths):
+        self.image_paths = new_image_paths
+        # Keep current index if possible
+        old_index = self.current_index
+        self.load_images()
+        if self.surfaces:
+            self.current_index = min(old_index, len(self.surfaces) - 1)
         else:
-            super().keyPressEvent(event)
+            self.current_index = 0
+        self.last_switch_time = time.time()
+
+    def show_current(self):
+        self.screen.fill(self.bg_color)
+        if not self.surfaces:
+            # Render fallback text
+            font = pygame.font.SysFont(None, 48)
+            text = font.render("No images found.", True, (200, 200, 200))
+            rect = text.get_rect(center=self.screen_rect.center)
+            self.screen.blit(text, rect)
+            pygame.display.flip()
+            return
+        surf = self.surfaces[self.current_index % len(self.surfaces)]
+        rect = surf.get_rect(center=self.screen_rect.center)
+        self.screen.blit(surf, rect)
+        pygame.display.flip()
+
+    def next_image(self, reset_timer=False):
+        if not self.surfaces:
+            return
+        print("[User Action] Next photo")
+        self.current_index = (self.current_index + 1) % len(self.surfaces)
+        if reset_timer:
+            self.last_switch_time = time.time()
+
+    def prev_image(self, reset_timer=False):
+        if not self.surfaces:
+            return
+        print("[User Action] Previous photo")
+        self.current_index = (self.current_index - 1) % len(self.surfaces)
+        if reset_timer:
+            self.last_switch_time = time.time()
 
     def toggle_pause(self):
         if self.paused:
             print("[User Action] Unpause slideshow")
-            self.timer.start(self.transition_time * 1000)
             self.paused = False
+            self.last_switch_time = time.time()
         else:
             print("[User Action] Pause slideshow")
-            self.timer.stop()
             self.paused = True
 
-    def show_next_image(self, reset_timer=False):
-        if not self.images:
-            self.label.setText("No images found.")
+    def rotate_current_image(self, degrees=-90):
+        if not self.image_paths or not self.surfaces:
             return
-        self.label.setPixmap(self.images[self.current])
-        self.current = (self.current + 1) % len(self.images)
-        if reset_timer and not self.paused:
-            self.timer.start(self.transition_time * 1000)
+        try:
+            path = self.image_paths[self.current_index]
+            direction = "right" if degrees == -90 else ("left" if degrees == 90 else f"{degrees}°")
+            print(f"[User Action] Rotate image {abs(degrees)}° {direction} and overwrite: {os.path.basename(path)}")
+            # Show overlay message before rotating
+            self._show_centered_message("Rotating, please wait")
+            pygame.event.pump()
+            with Image.open(path) as img:
+                rotated = img.rotate(degrees, expand=True)
+                save_kwargs = {}
+                if path.lower().endswith((".jpg", ".jpeg")):
+                    save_kwargs["quality"] = 95
+                rotated.save(path, **save_kwargs)
+            # Reload images and keep index on the same file
+            current_path = path
+            self.load_images()
+            if self.image_paths:
+                try:
+                    self.current_index = self.image_paths.index(current_path)
+                except ValueError:
+                    self.current_index = 0
+            # Immediately show the rotated image and reset timer
+            self.last_switch_time = time.time()
+            self.show_current()
+        except Exception as e:
+            print(f"Error rotating image: {e}")
 
-    def show_prev_image(self, reset_timer=False):
-        if not self.images:
-            self.label.setText("No images found.")
-            return
-        self.current = (self.current - 2) % len(self.images)  # -1 to go back, -1 because show_next_image will +1
-        self.show_next_image(reset_timer=reset_timer)
-
-    def refresh_images(self, new_image_paths):
-        self.image_paths = new_image_paths
-        self.load_images()
-        self.current = 0
-        self.show_next_image()
+    def run(self):
+        running = True
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        print("[User Action] Exit application")
+                        running = False
+                    elif event.key == pygame.K_RIGHT:
+                        self.next_image(reset_timer=True)
+                    elif event.key == pygame.K_LEFT:
+                        self.prev_image(reset_timer=True)
+                    elif event.key == pygame.K_SPACE:
+                        self.toggle_pause()
+                    elif event.key == pygame.K_DOWN:
+                        # Clockwise 90°
+                        self.rotate_current_image(degrees=-90)
+                    elif event.key == pygame.K_UP:
+                        # Anticlockwise 90°
+                        self.rotate_current_image(degrees=90)
+            if self.surfaces and (not self.paused) and ((time.time() - self.last_switch_time) >= self.transition_time):
+                self.next_image(reset_timer=True)
+            self.show_current()
+            self.clock.tick(60)
+        pygame.quit()
 
 def monitor_drive_folder(config, carousel):
     last_hash = None
@@ -196,13 +259,12 @@ def monitor_drive_folder(config, carousel):
                 last_hash = current_hash
         except Exception as e:
             print(f"Error monitoring Drive folder: {e}")
-            
-        sleep_time = config.get('monitor_interval', 600)     
+        
+        sleep_time = config.get('monitor_interval', 600)
         print(f"sleeping for : {sleep_time} seconds")
         time.sleep(sleep_time)
 
 if __name__ == "__main__":
-    import sys
     config = load_config()
     print("Loaded config:", config)
     ensure_download_folder(config['download_folder'])
@@ -212,15 +274,11 @@ if __name__ == "__main__":
         config['download_folder']
     )
     image_paths = get_local_images(config['download_folder'])
-    image_margin = config.get('image_margin', 40)  # Default margin 40px
-    app = QtWidgets.QApplication(sys.argv)
-    carousel = ImageCarousel(
+    carousel = PygameCarousel(
         image_paths,
-        config.get('transition_time', 3),
-        config.get('frame_color', '#FFFFFF'),
-        config.get('frame_width', 20),
-        image_margin
+        config.get('transition_time', 5),
+        config.get('image_margin', 40)
     )
     monitor_thread = threading.Thread(target=monitor_drive_folder, args=(config, carousel), daemon=True)
     monitor_thread.start()
-    sys.exit(app.exec_())
+    carousel.run()
