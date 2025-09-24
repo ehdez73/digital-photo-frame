@@ -1,0 +1,8 @@
+{
+  "service_account_json": "service_account.json",
+  "drive_folder_id": "YOUR_FOLDER_ID",
+  "download_folder": "downloads",
+  "transition_time": 5,
+  "monitor_interval": 600,
+  "image_margin": 40
+}
