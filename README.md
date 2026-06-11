@@ -1,5 +1,7 @@
 # Digital Photo Frame (Carousel)
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ehdez73/digital-photo-frame)  
+
 This application displays a fullscreen digital photo frame (carousel) that shows images from a Google Drive folder. It automatically downloads new images, displays them with animated transitions and a digital frame, and monitors the Google Drive folder for updates.
 
 ## Features
